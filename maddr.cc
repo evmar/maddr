@@ -25,7 +25,7 @@ struct Stream {
   Stream(uint8_t* data, int len) : data_(data), len_(len), ofs_(0) {}
 
   bool read(void* out, int count) {
-    if (ofs_ + count >= len_) {
+    if (ofs_ + count > len_) {
       ofs_ = len_;
       return false;
     }
@@ -181,13 +181,21 @@ void run_program(uint8_t* data, int len) {
       epilogue_begin = false;
       isa = 0;
     }
+    void emit() {
+      printf("0x%llx %d:%d%s\n", address, file, line, end_sequence ? " end" : "");
+    }
   };
   Registers regs;
   regs.reset(default_is_stmt);
 
+  //#define trace printf
+  #define trace if (0) printf
+
   for (;;) {
     uint8_t op;
-    check(in.read_uint8(&op));
+    if (!in.read_uint8(&op))
+      break;
+
     switch (op) {
     case 0x0: { // extended
       check(in.read_uleb128(NULL));  // length
@@ -195,13 +203,14 @@ void run_program(uint8_t* data, int len) {
       uint64_t addr;
       switch (op) {
       case 0x01:  // DW_LNE_end_sequence
-        printf("end sequence\n");
+        trace("end sequence\n");
         regs.end_sequence = true;
+        regs.emit();
         regs.reset(default_is_stmt);
         break;
       case 0x02:  // DW_LNE_set_address
         check(in.read_uint64(&addr));
-        printf("set addr 0x%llx\n", (unsigned long long)addr);
+        trace("set addr 0x%llx\n", (unsigned long long)addr);
         regs.address = addr;
         break;
       case 0x03:  // DW_LNE_define_file
@@ -214,10 +223,11 @@ void run_program(uint8_t* data, int len) {
     }
 
     case 0x1:  // DW_LNS_copy
-      printf("copy\n");
+      trace("copy\n");
       regs.basic_block = false;
       regs.prologue_end = false;
       regs.epilogue_begin = false;
+      regs.emit();
       break;
 
     case 0x2: {  // DW_LNS_advance_pc
@@ -225,7 +235,7 @@ void run_program(uint8_t* data, int len) {
       check(in.read_uleb128(&delta));
       delta *= minimum_instruction_length;
       regs.address += delta;
-      printf("advance pc %d => %llx\n", (int)delta, (long long)regs.address);
+      trace("advance pc %d => %llx\n", (int)delta, (long long)regs.address);
       break;
     }
 
@@ -233,14 +243,14 @@ void run_program(uint8_t* data, int len) {
       int64_t delta;
       check(in.read_sleb128(&delta));
       regs.line += delta;
-      printf("advance line %d => %d\n", (int)delta, (int)regs.line);
+      trace("advance line %d => %d\n", (int)delta, (int)regs.line);
       break;
     }
 
     case 0x4: { // DW_LNS_set_file
       uint64_t file;
       check(in.read_uleb128(&file));
-      printf("file %d %s\n", (int)file, files[file].c_str());
+      trace("file %d %s\n", (int)file, files[file].c_str());
       regs.file = file;
       break;
     }
@@ -265,7 +275,7 @@ void run_program(uint8_t* data, int len) {
       int address_increment =
         (adjusted_opcode / line_range) * minimum_instruction_length;
       regs.address += address_increment;
-      printf("add pc %d => %llx\n", address_increment, (long long)regs.address);
+      trace("add pc %d => %llx\n", address_increment, (long long)regs.address);
       break;
     }
 
@@ -281,18 +291,19 @@ DW_LNS_set_isa ‡  0x0c
 
     default: {
       int adjusted_opcode = op - opcode_base;
-      printf("special op 0x%x  ", adjusted_opcode);
+      trace("special op 0x%x  ", adjusted_opcode);
       int address_increment =
         (adjusted_opcode / line_range) * minimum_instruction_length;
       int line_increment = line_base + (adjusted_opcode % line_range);
+      regs.address += address_increment;
+      regs.line += line_increment;
+      trace("addr += %d => %llx, line += %d => %d\n",
+            address_increment, (long long)regs.address,
+            line_increment, (int)regs.line);
+      regs.emit();
       regs.basic_block = false;
       regs.prologue_end = false;
       regs.epilogue_begin = false;
-      regs.address += address_increment;
-      regs.line += line_increment;
-      printf("addr += %d => %llx, line += %d => %d\n",
-             address_increment, (long long)regs.address,
-             line_increment, (int)regs.line);
     }
     }
   }
