@@ -157,6 +157,7 @@ void AddressMap::load(uint8_t* data, int len) {
   check(in.read_uint32(&unit_length));
   if (unit_length == 0xFFFFFFFF)
     fatal("dwarf64 unimplemented");
+  int end = in.ofs_ + unit_length;
   uint16_t version;
   check(in.read_uint16(&version));
   uint32_t header_length;
@@ -206,7 +207,7 @@ void AddressMap::load(uint8_t* data, int len) {
   //#define trace printf
   #define trace if (0) printf
 
-  for (;;) {
+  while (in.ofs_ < end) {
     uint8_t op;
     if (!in.read_uint8(&op))
       break;
