@@ -21,6 +21,7 @@ void fatal_impl(const char* file, int line, const char* fmt, ...) {
 }
 
 #define fatal(fmt, args...) fatal_impl(__FILE__, __LINE__, fmt, ##args)
+#define check(x) if (!(x)) { fatal("check %s failed", #x); }
 
 struct Stream {
   Stream(uint8_t* data, int len) : data_(data), len_(len), ofs_(0) {}
@@ -95,8 +96,6 @@ struct Stream {
   int ofs_;
 };
 
-#define check(x) if (!(x)) { fatal("check %s failed", #x); }
-
 class AddressMap {
 public:
   void load(uint8_t* data, int len);
@@ -149,9 +148,6 @@ private:
 };
 
 void AddressMap::load(uint8_t* data, int len) {
-  // section 7.4 to find initial length field size
-  // 32 bits on dwarf32, 96 on dwarf64
-
   Stream in(data, len);
 
   uint32_t unit_length;
@@ -171,13 +167,13 @@ void AddressMap::load(uint8_t* data, int len) {
   check(in.read_int8(&line_base));
   uint8_t line_range;
   check(in.read_uint8(&line_range));
-  printf("base %d %d\n", line_base, line_range);
   uint8_t opcode_base;
   check(in.read_uint8(&opcode_base));
-  uint8_t* opcode_lengths = new uint8_t[opcode_base+1];
+
   for (int i = 1; i < opcode_base; i++) {
-    check(in.read_uint8(&opcode_lengths[i]));
-    printf("op %d %d\n", i, opcode_lengths[i]);
+    // In theory, we could record the opcode lengths here.
+    // But we don't need them.
+    check(in.read_uint8(NULL));
   }
 
   for (;;) {
@@ -185,10 +181,9 @@ void AddressMap::load(uint8_t* data, int len) {
     check(in.read_str(&path));
     if (path.empty())
       break;
-    printf("%s\n", path.c_str());
+    // TODO: record path.
   }
 
-  printf("files:\n");
   files_.push_back("who makes 1-indexed arrays, anyway?");
   for (;;) {
     std::string file;
@@ -200,7 +195,7 @@ void AddressMap::load(uint8_t* data, int len) {
     check(in.read_uleb128(&dir_index));
     check(in.read_uleb128(&mtime));
     check(in.read_uleb128(&file_length));
-    printf("%s %d %d %d\n", file.c_str(), (int)dir_index, (int)mtime, (int)file_length);
+    //printf("%s %d %d %d\n", file.c_str(), (int)dir_index, (int)mtime, (int)file_length);
   }
 
   Registers regs(default_is_stmt);
@@ -384,7 +379,12 @@ Elf64_Shdr* get_debug_lines_section(Elf64_Ehdr* header, uint8_t* data) {
 }
 
 int main(int argc, char* argv[]) {
-  const char* filename = "maddr";
+  if (argc < 2) {
+    printf("usage: %s file\n", argv[0]);
+    return 1;
+  }
+  const char* filename = argv[1];
+
   int fd = open(filename, O_RDONLY);
   if (fd < 0)
     fatal("open(%s): %s", filename, strerror(errno));
@@ -408,9 +408,17 @@ int main(int argc, char* argv[]) {
 
   AddressMap map;
   map.load(&data[shdr_lines->sh_offset], shdr_lines->sh_size);
-  std::string file; int line;
-  if (map.lookup(0x40419a, &file, &line))
-    printf("%s:%d\n", file.c_str(), line);
+
+  char buf[1024];
+  while (fgets(buf, sizeof(buf), stdin)) {
+    long long address = strtoll(buf, NULL, 16);
+
+    std::string file; int line;
+    if (map.lookup(address, &file, &line))
+      printf("%s:%d\n", file.c_str(), line);
+    else
+      printf("unknown\n");
+  }
 
   return 0;
 }
