@@ -1,5 +1,6 @@
 #include <elf.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -115,6 +116,7 @@ private:
     bool prologue_end;
     bool epilogue_begin;
     int isa;
+    int discriminator;
     explicit Registers(bool default_is_stmt) :
       address(0),
       file(1),
@@ -125,7 +127,8 @@ private:
       end_sequence(false),
       prologue_end(false),
       epilogue_begin(false),
-      isa(0) {
+      isa(0),
+      discriminator(0) {
     }
   };
 
@@ -200,8 +203,8 @@ void AddressMap::load(uint8_t* data, int len) {
 
   Registers regs(default_is_stmt);
 
-  //#define trace printf
-  #define trace if (0) printf
+  #define trace printf
+  //#define trace if (0) printf
 
   for (;;) {
     uint8_t op;
@@ -225,6 +228,11 @@ void AddressMap::load(uint8_t* data, int len) {
         trace("set addr 0x%llx\n", (unsigned long long)addr);
         regs.address = addr;
         break;
+      case 0x04:  // DW_LNE_set_discriminator
+        check(in.read_uleb128(&addr));
+        trace("set discriminator %d\n", (int)addr);
+        regs.discriminator = (int)addr;
+        break;
       case 0x03:  // DW_LNE_define_file
       case 0x80:  // DW_LNE_lo_user
       case 0xff:  // DW_LNE_hi_user
@@ -236,10 +244,11 @@ void AddressMap::load(uint8_t* data, int len) {
 
     case 0x1:  // DW_LNS_copy
       trace("copy\n");
+      emit(regs);
       regs.basic_block = false;
       regs.prologue_end = false;
       regs.epilogue_begin = false;
-      emit(regs);
+      regs.discriminator = 0;
       break;
 
     case 0x2: {  // DW_LNS_advance_pc
@@ -316,6 +325,7 @@ DW_LNS_set_isa ‡  0x0c
       regs.basic_block = false;
       regs.prologue_end = false;
       regs.epilogue_begin = false;
+      regs.discriminator = 0;
     }
     }
   }
