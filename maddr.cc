@@ -145,9 +145,15 @@ private:
   int load_one(uint8_t* data, int len);
 
   void emit(const Registers& regs) {
-    matrix_.push_back(Row(regs.address, regs.file, regs.line));
+    if (regs.address) {
+      int file = regs.file;
+      if (file > 0)
+        file += file_offset_ - 1;
+      matrix_.push_back(Row(regs.address, file, regs.line));
+    }
   }
 
+  int file_offset_;
   std::vector<std::string> files_;
   std::vector<Row> matrix_;
 };
@@ -158,6 +164,8 @@ void AddressMap::load(uint8_t* data, int len) {
     data += one_len;
     len -= one_len;
   }
+
+  std::sort(matrix_.begin(), matrix_.end());
 }
 
 int AddressMap::load_one(uint8_t* data, int len) {
@@ -198,7 +206,7 @@ int AddressMap::load_one(uint8_t* data, int len) {
     // TODO: record path.
   }
 
-  files_.push_back("who makes 1-indexed arrays, anyway?");
+  file_offset_ = files_.size();
   for (;;) {
     std::string file;
     check(in.read_str(&file));
@@ -282,7 +290,11 @@ int AddressMap::load_one(uint8_t* data, int len) {
     case 0x4: { // DW_LNS_set_file
       uint64_t file;
       check(in.read_uleb128(&file));
-      trace("file %d %s\n", (int)file, files_[file].c_str());
+      const char* filename = "??";
+      if (file > 0) {
+        filename = files_[file_offset_ + file - 1].c_str();
+      }
+      trace("file %s\n", filename);
       regs.file = file;
       break;
     }
@@ -358,7 +370,7 @@ bool AddressMap::lookup(uint64_t address, std::string* file, int* line) {
   // Find the first address greater than the query, then back up by one.
   std::vector<Row>::const_iterator i =
       std::upper_bound(matrix_.begin(), matrix_.end(), query);
-  if (i == matrix_.begin())
+  if (i == matrix_.begin() || i == matrix_.end())
     return false;
   --i;
   *file = files_[i->file];
@@ -432,6 +444,7 @@ int main(int argc, char* argv[]) {
 
   AddressMap map;
   map.load(&data[shdr_lines->sh_offset], shdr_lines->sh_size);
+  //map.dump();
 
   char buf[1024];
   while (fgets(buf, sizeof(buf), stdin)) {
@@ -441,7 +454,7 @@ int main(int argc, char* argv[]) {
     if (map.lookup(address, &file, &line))
       printf("%s:%d\n", file.c_str(), line);
     else
-      printf("unknown\n");
+      printf("??:0\n");
   }
 
   return 0;
