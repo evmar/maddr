@@ -203,12 +203,6 @@ void AddressMap::load(uint8_t* data, int len) {
     printf("%s %d %d %d\n", file.c_str(), (int)dir_index, (int)mtime, (int)file_length);
   }
 
-  /*uint8_t c;
-  for (int i = 0; i < 32; i++) {
-    check(in.read_uint8(&c));
-    printf("%d 0x%02x %c\n", i, (int)c, (int)c);
-    }*/
-
   Registers regs(default_is_stmt);
 
   //#define trace printf
@@ -353,6 +347,42 @@ bool AddressMap::lookup(uint64_t address, std::string* file, int* line) {
   return true;
 }
 
+void check_header(Elf64_Ehdr* header) {
+  if (memcmp(header->e_ident, ELFMAG, SELFMAG) != 0)
+    fatal("bad magic");
+
+  int eclass = header->e_ident[EI_CLASS];
+  if (eclass != ELFCLASS64)
+    fatal("bad elf class %d", eclass);
+
+  int edata = header->e_ident[EI_DATA];
+  if (edata != ELFDATA2LSB)
+    fatal("bad elf data format %d", edata);
+
+  int eversion = header->e_ident[EI_VERSION];
+  if (eversion != EV_CURRENT)
+    fatal("bad elf version %d", eversion);
+
+  /*int eabi = header->e_ident[EI_OSABI];
+  if (eabi != ELFOSABI_LINUX)
+    fatal("%s: bad elf abi %d", filename, eabi);*/
+}
+
+Elf64_Shdr* get_debug_lines_section(Elf64_Ehdr* header, uint8_t* data) {
+  Elf64_Shdr* sheaders = (Elf64_Shdr*)(data + header->e_shoff);
+  int sheader_count = header->e_shnum;
+  Elf64_Shdr* sheader_names = &sheaders[header->e_shstrndx];
+  char* names = (char*)&data[sheader_names->sh_offset];
+
+  for (int i = 0; i < sheader_count; i++) {
+    Elf64_Shdr* shdr = &sheaders[i];
+    char* name = names + shdr->sh_name;
+    if (strcmp(name, ".debug_line") == 0)
+      return shdr;
+  }
+  return NULL;
+}
+
 int main(int argc, char* argv[]) {
   const char* filename = "maddr";
   int fd = open(filename, O_RDONLY);
@@ -370,50 +400,14 @@ int main(int argc, char* argv[]) {
     fatal("mmap(%d): %s", fd, strerror(errno));
 
   Elf64_Ehdr* header = (Elf64_Ehdr*)data;
-  if (memcmp(header->e_ident, ELFMAG, SELFMAG) != 0)
-    fatal("%s: bad magic", filename);
+  check_header(header);
 
-  int eclass = header->e_ident[EI_CLASS];
-  if (eclass != ELFCLASS64)
-    fatal("%s: bad elf class %d", filename, eclass);
-
-  int edata = header->e_ident[EI_DATA];
-  if (edata != ELFDATA2LSB)
-    fatal("%s: bad elf data format %d", filename, edata);
-
-  int eversion = header->e_ident[EI_VERSION];
-  if (eversion != EV_CURRENT)
-    fatal("%s: bad elf version %d", filename, eversion);
-
-  /*int eabi = header->e_ident[EI_OSABI];
-  if (eabi != ELFOSABI_LINUX)
-    fatal("%s: bad elf abi %d", filename, eabi);*/
-
-  Elf64_Shdr* sheaders = (Elf64_Shdr*)(data + header->e_shoff);
-  int sheader_count = header->e_shnum;
-
-  Elf64_Shdr* sheader_names = &sheaders[header->e_shstrndx];
-  uint8_t* names = &data[sheader_names->sh_offset];
-
-  Elf64_Shdr* shdr_lines = NULL;
-
-  for (int i = 0; i < sheader_count; i++) {
-    Elf64_Shdr* shdr = &sheaders[i];
-    uint8_t* name = names + shdr->sh_name;
-    if (strcmp((char*)name, ".debug_line") == 0) {
-      shdr_lines = shdr;
-      break;
-    }
-    printf("header %d name %s\n", i, name);
-  }
-
+  Elf64_Shdr* shdr_lines = get_debug_lines_section(header, data);
   if (!shdr_lines)
     fatal("couldn't find .debug_line");
 
   AddressMap map;
   map.load(&data[shdr_lines->sh_offset], shdr_lines->sh_size);
-  map.dump();
-  printf("\n");
   std::string file; int line;
   if (map.lookup(0x40419a, &file, &line))
     printf("%s:%d\n", file.c_str(), line);
