@@ -142,6 +142,8 @@ private:
     }
   };
 
+  int load_one(uint8_t* data, int len);
+
   void emit(const Registers& regs) {
     matrix_.push_back(Row(regs.address, regs.file, regs.line));
   }
@@ -151,6 +153,14 @@ private:
 };
 
 void AddressMap::load(uint8_t* data, int len) {
+  while (len > 0) {
+    int one_len = load_one(data, len);
+    data += one_len;
+    len -= one_len;
+  }
+}
+
+int AddressMap::load_one(uint8_t* data, int len) {
   Stream in(data, len);
 
   uint32_t unit_length;
@@ -331,6 +341,8 @@ DW_LNS_set_isa ‡  0x0c
     }
     }
   }
+
+  return in.ofs_;
 }
 
 void AddressMap::dump() {
