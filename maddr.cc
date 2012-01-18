@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <string.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -96,7 +97,58 @@ struct Stream {
 
 #define check(x) if (!(x)) { fatal("check %s failed", #x); }
 
-void run_program(uint8_t* data, int len) {
+class AddressMap {
+public:
+  void load(uint8_t* data, int len);
+
+  void dump();
+  bool lookup(uint64_t address, std::string* file, int* line);
+
+private:
+  struct Registers {
+    uint64_t address;
+    int file;
+    int line;
+    int column;
+    bool is_stmt;
+    bool basic_block;
+    bool end_sequence;
+    bool prologue_end;
+    bool epilogue_begin;
+    int isa;
+    explicit Registers(bool default_is_stmt) :
+      address(0),
+      file(1),
+      line(1),
+      column(0),
+      is_stmt(default_is_stmt),
+      basic_block(false),
+      end_sequence(false),
+      prologue_end(false),
+      epilogue_begin(false),
+      isa(0) {
+    }
+  };
+
+  struct Row {
+    uint64_t address;
+    int file;
+    int line;
+    Row(uint64_t a, int f, int l) : address(a), file(f), line(l) {}
+    bool operator<(const Row& other) const {
+      return address < other.address;
+    }
+  };
+
+  void emit(const Registers& regs) {
+    matrix_.push_back(Row(regs.address, regs.file, regs.line));
+  }
+
+  std::vector<std::string> files_;
+  std::vector<Row> matrix_;
+};
+
+void AddressMap::load(uint8_t* data, int len) {
   // section 7.4 to find initial length field size
   // 32 bits on dwarf32, 96 on dwarf64
 
@@ -137,14 +189,13 @@ void run_program(uint8_t* data, int len) {
   }
 
   printf("files:\n");
-  std::vector<std::string> files;
-  files.push_back("who makes 1-indexed arrays, anyway?");
+  files_.push_back("who makes 1-indexed arrays, anyway?");
   for (;;) {
     std::string file;
     check(in.read_str(&file));
     if (file.empty())
       break;
-    files.push_back(file);
+    files_.push_back(file);
     uint64_t dir_index = 0, mtime = 0, file_length = 0;
     check(in.read_uleb128(&dir_index));
     check(in.read_uleb128(&mtime));
@@ -158,35 +209,7 @@ void run_program(uint8_t* data, int len) {
     printf("%d 0x%02x %c\n", i, (int)c, (int)c);
     }*/
 
-  struct Registers {
-    uint64_t address;
-    int file;
-    int line;
-    int column;
-    bool is_stmt;
-    bool basic_block;
-    bool end_sequence;
-    bool prologue_end;
-    bool epilogue_begin;
-    int isa;
-    void reset(bool default_is_stmt) {
-      address = 0;
-      file = 1;
-      line = 1;
-      column = 0;
-      is_stmt = default_is_stmt;
-      basic_block = false;
-      end_sequence = false;
-      prologue_end = false;
-      epilogue_begin = false;
-      isa = 0;
-    }
-    void emit() {
-      printf("0x%llx %d:%d%s\n", address, file, line, end_sequence ? " end" : "");
-    }
-  };
-  Registers regs;
-  regs.reset(default_is_stmt);
+  Registers regs(default_is_stmt);
 
   //#define trace printf
   #define trace if (0) printf
@@ -205,8 +228,8 @@ void run_program(uint8_t* data, int len) {
       case 0x01:  // DW_LNE_end_sequence
         trace("end sequence\n");
         regs.end_sequence = true;
-        regs.emit();
-        regs.reset(default_is_stmt);
+        emit(regs);
+        regs = Registers(default_is_stmt);
         break;
       case 0x02:  // DW_LNE_set_address
         check(in.read_uint64(&addr));
@@ -227,7 +250,7 @@ void run_program(uint8_t* data, int len) {
       regs.basic_block = false;
       regs.prologue_end = false;
       regs.epilogue_begin = false;
-      regs.emit();
+      emit(regs);
       break;
 
     case 0x2: {  // DW_LNS_advance_pc
@@ -250,7 +273,7 @@ void run_program(uint8_t* data, int len) {
     case 0x4: { // DW_LNS_set_file
       uint64_t file;
       check(in.read_uleb128(&file));
-      trace("file %d %s\n", (int)file, files[file].c_str());
+      trace("file %d %s\n", (int)file, files_[file].c_str());
       regs.file = file;
       break;
     }
@@ -300,15 +323,34 @@ DW_LNS_set_isa ‡  0x0c
       trace("addr += %d => %llx, line += %d => %d\n",
             address_increment, (long long)regs.address,
             line_increment, (int)regs.line);
-      regs.emit();
+      emit(regs);
       regs.basic_block = false;
       regs.prologue_end = false;
       regs.epilogue_begin = false;
     }
     }
   }
+}
 
+void AddressMap::dump() {
+  for (std::vector<Row>::const_iterator i = matrix_.begin();
+       i != matrix_.end(); ++i) {
+    printf("%llx %s:%d\n", (long long)i->address,
+           files_[i->file].c_str(), i->line);
+  }
+}
 
+bool AddressMap::lookup(uint64_t address, std::string* file, int* line) {
+  Row query(address, 0, 0);
+  // Find the first address greater than the query, then back up by one.
+  std::vector<Row>::const_iterator i =
+      std::upper_bound(matrix_.begin(), matrix_.end(), query);
+  if (i == matrix_.begin())
+    return false;
+  --i;
+  *file = files_[i->file];
+  *line = i->line;
+  return true;
 }
 
 int main(int argc, char* argv[]) {
@@ -368,7 +410,13 @@ int main(int argc, char* argv[]) {
   if (!shdr_lines)
     fatal("couldn't find .debug_line");
 
-  run_program(&data[shdr_lines->sh_offset], shdr_lines->sh_size);
+  AddressMap map;
+  map.load(&data[shdr_lines->sh_offset], shdr_lines->sh_size);
+  map.dump();
+  printf("\n");
+  std::string file; int line;
+  if (map.lookup(0x40419a, &file, &line))
+    printf("%s:%d\n", file.c_str(), line);
 
   return 0;
 }
