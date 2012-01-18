@@ -203,8 +203,8 @@ void AddressMap::load(uint8_t* data, int len) {
 
   Registers regs(default_is_stmt);
 
-  #define trace printf
-  //#define trace if (0) printf
+  //#define trace printf
+  #define trace if (0) printf
 
   for (;;) {
     uint8_t op;
@@ -282,7 +282,8 @@ void AddressMap::load(uint8_t* data, int len) {
     }
 
     case 0x6: { // DW_LNS_negate_stmt
-      fatal("unimpl\n");
+      trace("negate stmt\n");
+      regs.is_stmt = !!regs.is_stmt;
       break;
     }
 
