@@ -24,6 +24,13 @@ void fatal_impl(const char* file, int line, const char* fmt, ...) {
 #define fatal(fmt, args...) fatal_impl(__FILE__, __LINE__, fmt, ##args)
 #define check(x) if (!(x)) { fatal("check %s failed", #x); }
 
+#define trace_on
+#ifdef trace_on
+#define trace printf
+#else
+#define trace if (0) printf
+#endif
+
 struct Stream {
   Stream(uint8_t* data, int len) : data_(data), len_(len), ofs_(0) {}
 
@@ -236,9 +243,6 @@ int AddressMap::load_one(uint8_t* data, int len) {
   }
 
   Registers regs(default_is_stmt);
-
-  //#define trace printf
-  #define trace if (0) printf
 
   while (in.ofs_ < end) {
     uint8_t op;
