@@ -1,5 +1,6 @@
 #include <elf.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -123,6 +124,7 @@ private:
     bool prologue_end;
     bool epilogue_begin;
     int isa;
+    int discriminator;
     explicit Registers(bool default_is_stmt) :
       address(0),
       file(1),
@@ -133,7 +135,8 @@ private:
       end_sequence(false),
       prologue_end(false),
       epilogue_begin(false),
-      isa(0) {
+      isa(0),
+      discriminator(0) {
     }
   };
 
@@ -147,19 +150,38 @@ private:
     }
   };
 
+  int load_one(uint8_t* data, int len);
+
   void emit(const Registers& regs) {
-    matrix_.push_back(Row(regs.address, regs.file, regs.line));
+    if (regs.address) {
+      int file = regs.file;
+      if (file > 0)
+        file += file_offset_ - 1;
+      matrix_.push_back(Row(regs.address, file, regs.line));
+    }
   }
 
+  int file_offset_;
   std::vector<std::string> files_;
   std::vector<Row> matrix_;
 };
 
 void AddressMap::load(uint8_t* data, int len) {
+  while (len > 0) {
+    int one_len = load_one(data, len);
+    data += one_len;
+    len -= one_len;
+  }
+
+  std::sort(matrix_.begin(), matrix_.end());
+}
+
+int AddressMap::load_one(uint8_t* data, int len) {
   Stream in(data, len);
 
   uint32_t unit_length;
   check(in.read_initial_length(&unit_length));
+  int end = in.ofs_ + unit_length;
   uint16_t version;
   check(in.read_uint16(&version));
   uint32_t header_length;
@@ -190,7 +212,7 @@ void AddressMap::load(uint8_t* data, int len) {
     // TODO: record path.
   }
 
-  files_.push_back("who makes 1-indexed arrays, anyway?");
+  file_offset_ = files_.size();
   for (;;) {
     std::string file;
     check(in.read_str(&file));
@@ -209,7 +231,7 @@ void AddressMap::load(uint8_t* data, int len) {
   //#define trace printf
   #define trace if (0) printf
 
-  for (;;) {
+  while (in.ofs_ < end) {
     uint8_t op;
     if (!in.read_uint8(&op))
       break;
@@ -231,6 +253,11 @@ void AddressMap::load(uint8_t* data, int len) {
         trace("set addr 0x%llx\n", (unsigned long long)addr);
         regs.address = addr;
         break;
+      case 0x04:  // DW_LNE_set_discriminator
+        check(in.read_uleb128(&addr));
+        trace("set discriminator %d\n", (int)addr);
+        regs.discriminator = (int)addr;
+        break;
       case 0x03:  // DW_LNE_define_file
       case 0x80:  // DW_LNE_lo_user
       case 0xff:  // DW_LNE_hi_user
@@ -242,10 +269,11 @@ void AddressMap::load(uint8_t* data, int len) {
 
     case 0x1:  // DW_LNS_copy
       trace("copy\n");
+      emit(regs);
       regs.basic_block = false;
       regs.prologue_end = false;
       regs.epilogue_begin = false;
-      emit(regs);
+      regs.discriminator = 0;
       break;
 
     case 0x2: {  // DW_LNS_advance_pc
@@ -268,7 +296,11 @@ void AddressMap::load(uint8_t* data, int len) {
     case 0x4: { // DW_LNS_set_file
       uint64_t file;
       check(in.read_uleb128(&file));
-      trace("file %d %s\n", (int)file, files_[file].c_str());
+      const char* filename = "??";
+      if (file > 0) {
+        filename = files_[file_offset_ + file - 1].c_str();
+      }
+      trace("file %s\n", filename);
       regs.file = file;
       break;
     }
@@ -279,7 +311,8 @@ void AddressMap::load(uint8_t* data, int len) {
     }
 
     case 0x6: { // DW_LNS_negate_stmt
-      fatal("unimpl\n");
+      trace("negate stmt\n");
+      regs.is_stmt = !!regs.is_stmt;
       break;
     }
 
@@ -322,9 +355,12 @@ DW_LNS_set_isa ‡  0x0c
       regs.basic_block = false;
       regs.prologue_end = false;
       regs.epilogue_begin = false;
+      regs.discriminator = 0;
     }
     }
   }
+
+  return in.ofs_;
 }
 
 void AddressMap::dump() {
@@ -340,7 +376,7 @@ bool AddressMap::lookup(uint64_t address, std::string* file, int* line) {
   // Find the first address greater than the query, then back up by one.
   std::vector<Row>::const_iterator i =
       std::upper_bound(matrix_.begin(), matrix_.end(), query);
-  if (i == matrix_.begin())
+  if (i == matrix_.begin() || i == matrix_.end())
     return false;
   --i;
   *file = files_[i->file];
@@ -435,7 +471,7 @@ void addr2line(Elf64_Ehdr* header, uint8_t* data) {
     if (map.lookup(address, &file, &line))
       printf("%s:%d\n", file.c_str(), line);
     else
-      printf("unknown\n");
+      printf("??:0\n");
   }
 }
 
