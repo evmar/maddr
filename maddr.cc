@@ -446,6 +446,30 @@ int ArangesMap::load_one(uint8_t* data, int len) {
 }
 
 
+
+class DebugInfo {
+public:
+  void load(uint8_t* data, int len);
+};
+
+void DebugInfo::load(uint8_t* data, int len) {
+  Stream in(data, len);
+
+  uint32_t unit_length;
+  check(in.read_initial_length(&unit_length));
+  uint16_t version;
+  check(in.read_uint16(&version));
+  uint32_t debug_abbrev_offset;
+  check(in.read_uint32(&debug_abbrev_offset));
+  uint8_t address_size;
+  check(in.read_uint8(&address_size));
+  trace("len %d ver %d ofs %d size %d\n", unit_length, version, debug_abbrev_offset, address_size);
+
+  uint64_t abbreviation_code;
+  check(in.read_uleb128(&abbreviation_code));
+  trace("code %d\n", (int)abbreviation_code);
+}
+
 void check_header(Elf64_Ehdr* header) {
   if (memcmp(header->e_ident, ELFMAG, SELFMAG) != 0)
     fatal("bad magic");
@@ -527,12 +551,20 @@ int main(int argc, char* argv[]) {
   Elf64_Ehdr* header = (Elf64_Ehdr*)data;
   check_header(header);
 
+  /*
   Elf64_Shdr* shdr_aranges = get_section(header, ".debug_aranges", data);
   if (!shdr_aranges)
     fatal("couldn't find .debug_aranges");
 
   ArangesMap map;
   map.load(&data[shdr_aranges->sh_offset], shdr_aranges->sh_size);
+  */
+
+  Elf64_Shdr* shdr_debuginfo = get_section(header, ".debug_info", data);
+  if (!shdr_debuginfo)
+    fatal("couldn't find .debug_info");
+  DebugInfo debug_info;
+  debug_info.load(&data[shdr_debuginfo->sh_offset], shdr_debuginfo->sh_size);
 
   return 0;
 }
