@@ -128,6 +128,8 @@ public:
 
   Elf64_Shdr* lookup_section(const char* target);
 
+  uint8_t* data() const { return data_; }
+
 private:
   uint8_t* data_;
   int len_;
@@ -507,11 +509,15 @@ int ArangesMap::load_one(uint8_t* data, int len) {
 
 class DebugInfo {
 public:
-  void load(uint8_t* data, int len);
+  void load(Elf* elf);
 };
 
-void DebugInfo::load(uint8_t* data, int len) {
-  Stream in(data, len);
+void DebugInfo::load(Elf* elf) {
+  Elf64_Shdr* shdr_debuginfo = elf->lookup_section(".debug_info");
+  if (!shdr_debuginfo)
+    fatal("couldn't find .debug_info");
+
+  Stream in(elf->data() + shdr_debuginfo->sh_offset, shdr_debuginfo->sh_size);
 
   uint32_t unit_length;
   check(in.read_initial_length(&unit_length));
@@ -581,12 +587,8 @@ int main(int argc, char* argv[]) {
   map.load(&data[shdr_aranges->sh_offset], shdr_aranges->sh_size);
   */
 
-  Elf64_Shdr* shdr_debuginfo = elf.lookup_section(".debug_info");
-  if (!shdr_debuginfo)
-    fatal("couldn't find .debug_info");
-
   DebugInfo debug_info;
-  debug_info.load(&data[shdr_debuginfo->sh_offset], shdr_debuginfo->sh_size);
+  debug_info.load(&elf);
 
   return 0;
 }
