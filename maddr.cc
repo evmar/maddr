@@ -100,6 +100,15 @@ struct Stream {
     return true;
   }
 
+  bool align(int boundary) {
+    int extra = ofs_ % boundary;
+    if (extra) {
+      int pad = boundary - extra;
+      return read(NULL, pad);
+    }
+    return true;
+  }
+
   uint8_t* data_;
   int len_;
   int ofs_;
@@ -389,10 +398,20 @@ public:
   void load(uint8_t* data, int len);
 
 private:
+  int load_one(uint8_t* data, int len);
+
   std::vector<uint64_t> offsets_;
 };
 
 void ArangesMap::load(uint8_t* data, int len) {
+  while (len > 0) {
+    int consumed = load_one(data, len);
+    data += consumed;
+    len -= consumed;
+  }
+}
+
+int ArangesMap::load_one(uint8_t* data, int len) {
   Stream in(data, len);
 
   uint32_t unit_length;
@@ -406,15 +425,20 @@ void ArangesMap::load(uint8_t* data, int len) {
   uint8_t segment_size;
   check(in.read_uint8(&segment_size));
 
-  printf("len %d ver %d off %lld addr %d seg %d\n",
-         unit_length, version, (long long)debug_info_offset, address_size, segment_size);
+  check(in.align(2 * 8));
+
+  trace("len %d ver %d off %lld addr %d seg %d\n",
+        unit_length, version, (long long)debug_info_offset, address_size, segment_size);
   for (;;) {
     uint64_t addr, length;
     if (!in.read_uint64(&addr))
       break;
     check(in.read_uint64(&length));
-    printf("%16llx %16llx\n", (long long)addr, (long long)length);
+    trace("ofs %llx len %llx\n", (long long)addr, (long long)length);
+    if (addr == 0 && length == 0)
+      break;
   }
+  return in.ofs_;
 }
 
 

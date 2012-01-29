@@ -1,4 +1,5 @@
-CFLAGS=-Wall -g -O2
+CFLAGS=-Wall -g
+# -O2
 
 maddr: maddr.cc
 	g++ $(CFLAGS) -o $@ $<
