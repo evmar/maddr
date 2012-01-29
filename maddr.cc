@@ -91,6 +91,14 @@ struct Stream {
     return true;
   }
 
+  bool read_initial_length(uint32_t* out) {
+    if (!read_uint32(out))
+      return false;
+    if ((*out & 0xFFFFFFF0) == 0xFFFFFFF0)
+      fatal("initial length extension (dwarf64?) unimplemented");
+    return true;
+  }
+
   uint8_t* data_;
   int len_;
   int ofs_;
@@ -151,9 +159,7 @@ void AddressMap::load(uint8_t* data, int len) {
   Stream in(data, len);
 
   uint32_t unit_length;
-  check(in.read_uint32(&unit_length));
-  if (unit_length == 0xFFFFFFFF)
-    fatal("dwarf64 unimplemented");
+  check(in.read_initial_length(&unit_length));
   uint16_t version;
   check(in.read_uint16(&version));
   uint32_t header_length;
@@ -342,6 +348,40 @@ bool AddressMap::lookup(uint64_t address, std::string* file, int* line) {
   return true;
 }
 
+class ArangesMap {
+public:
+  void load(uint8_t* data, int len);
+
+private:
+  std::vector<uint64_t> offsets_;
+};
+
+void ArangesMap::load(uint8_t* data, int len) {
+  Stream in(data, len);
+
+  uint32_t unit_length;
+  check(in.read_initial_length(&unit_length));
+  uint16_t version;
+  check(in.read_uint16(&version));
+  uint32_t debug_info_offset;
+  check(in.read_uint32(&debug_info_offset));
+  uint8_t address_size;
+  check(in.read_uint8(&address_size));
+  uint8_t segment_size;
+  check(in.read_uint8(&segment_size));
+
+  printf("len %d ver %d off %lld addr %d seg %d\n",
+         unit_length, version, (long long)debug_info_offset, address_size, segment_size);
+  for (;;) {
+    uint64_t addr, length;
+    if (!in.read_uint64(&addr))
+      break;
+    check(in.read_uint64(&length));
+    printf("%16llx %16llx\n", (long long)addr, (long long)length);
+  }
+}
+
+
 void check_header(Elf64_Ehdr* header) {
   if (memcmp(header->e_ident, ELFMAG, SELFMAG) != 0)
     fatal("bad magic");
@@ -363,7 +403,8 @@ void check_header(Elf64_Ehdr* header) {
     fatal("%s: bad elf abi %d", filename, eabi);*/
 }
 
-Elf64_Shdr* get_debug_lines_section(Elf64_Ehdr* header, uint8_t* data) {
+Elf64_Shdr* get_section(Elf64_Ehdr* header, const char* target,
+                        uint8_t* data) {
   Elf64_Shdr* sheaders = (Elf64_Shdr*)(data + header->e_shoff);
   int sheader_count = header->e_shnum;
   Elf64_Shdr* sheader_names = &sheaders[header->e_shstrndx];
@@ -372,10 +413,30 @@ Elf64_Shdr* get_debug_lines_section(Elf64_Ehdr* header, uint8_t* data) {
   for (int i = 0; i < sheader_count; i++) {
     Elf64_Shdr* shdr = &sheaders[i];
     char* name = names + shdr->sh_name;
-    if (strcmp(name, ".debug_line") == 0)
+    if (strcmp(name, target) == 0)
       return shdr;
   }
   return NULL;
+}
+
+void addr2line(Elf64_Ehdr* header, uint8_t* data) {
+  Elf64_Shdr* shdr_lines = get_section(header, ".debug_line", data);
+  if (!shdr_lines)
+    fatal("couldn't find .debug_line");
+
+  AddressMap map;
+  map.load(&data[shdr_lines->sh_offset], shdr_lines->sh_size);
+
+  char buf[1024];
+  while (fgets(buf, sizeof(buf), stdin)) {
+    long long address = strtoll(buf, NULL, 16);
+
+    std::string file; int line;
+    if (map.lookup(address, &file, &line))
+      printf("%s:%d\n", file.c_str(), line);
+    else
+      printf("unknown\n");
+  }
 }
 
 int main(int argc, char* argv[]) {
@@ -402,23 +463,12 @@ int main(int argc, char* argv[]) {
   Elf64_Ehdr* header = (Elf64_Ehdr*)data;
   check_header(header);
 
-  Elf64_Shdr* shdr_lines = get_debug_lines_section(header, data);
-  if (!shdr_lines)
-    fatal("couldn't find .debug_line");
+  Elf64_Shdr* shdr_aranges = get_section(header, ".debug_aranges", data);
+  if (!shdr_aranges)
+    fatal("couldn't find .debug_aranges");
 
-  AddressMap map;
-  map.load(&data[shdr_lines->sh_offset], shdr_lines->sh_size);
-
-  char buf[1024];
-  while (fgets(buf, sizeof(buf), stdin)) {
-    long long address = strtoll(buf, NULL, 16);
-
-    std::string file; int line;
-    if (map.lookup(address, &file, &line))
-      printf("%s:%d\n", file.c_str(), line);
-    else
-      printf("unknown\n");
-  }
+  ArangesMap map;
+  map.load(&data[shdr_aranges->sh_offset], shdr_aranges->sh_size);
 
   return 0;
 }
