@@ -529,9 +529,44 @@ void DebugInfo::load(Elf* elf) {
   check(in.read_uint8(&address_size));
   trace("len %d ver %d ofs %d size %d\n", unit_length, version, debug_abbrev_offset, address_size);
 
+  // 7.5.2 Debugging Information Entry
+
   uint64_t abbreviation_code;
   check(in.read_uleb128(&abbreviation_code));
   trace("code %d\n", (int)abbreviation_code);
+
+
+  Elf64_Shdr* shdr_debugabbrev = elf->lookup_section(".debug_abbrev");
+  if (!shdr_debugabbrev)
+    fatal("couldn't find .debug_abbrev");
+  Stream debugabbrev(elf->data() + shdr_debugabbrev->sh_offset,
+                     shdr_debugabbrev->sh_size);
+  uint64_t code, tag;
+  check(debugabbrev.read_uleb128(&code));
+  check(debugabbrev.read_uleb128(&tag));
+  trace("debugabbrev\n");
+  trace("code 0x%x tag 0x%x (0x11 = compile_unit)\n", (int)code, (int)tag);
+
+  enum {
+    DW_CHILDREN_no = 0x0,
+    DW_CHILDREN_yes = 0x1
+  };
+
+  uint8_t child_tag;
+  check(debugabbrev.read_uint8(&child_tag));
+  printf("child %d\n", (int)child_tag);
+  if (child_tag == DW_CHILDREN_yes) {
+  }
+
+  for (;;) {
+    uint64_t attr_name, attr_form;
+    check(in.read_uleb128(&attr_name));
+    check(in.read_uleb128(&attr_form));
+    if (attr_name == 0 && attr_form == 0)
+      break;
+    trace("attr name 0x%x form 0x%x\n", attr_name, attr_form);
+  }
+
 }
 
 void addr2line(Elf* elf, uint8_t* data) {
