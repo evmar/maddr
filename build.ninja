@@ -1,0 +1,14 @@
+cflags = -g -Wall
+
+cxx = g++
+
+rule cxx
+  command = $cxx $cflags -c $in -o $out
+  description = CXX $out
+
+rule link
+  command = $cxx -o $out $in
+  description = LINK $out
+
+build maddr.o: cxx maddr.cc
+build maddr: link maddr.o
